@@ -1,0 +1,53 @@
+rules_version = '2';
+// Lakhipur Pharmacy — Firestore security rules
+// Paste into Firebase Console -> Firestore Database -> Rules, then Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function hasProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function active() { return hasProfile() && me().active == true; }
+    function isAdmin() { return active() && me().role == 'admin'; }
+    function isStaff() { return active() && me().role == 'staff'; }
+    function canEnter() { return isAdmin() || isStaff(); }
+    function mine() { return request.resource.data.createdBy == request.auth.uid; }
+
+    match /users/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow create: if isAdmin()
+        || (signedIn() && request.auth.uid == uid
+            && request.auth.token.email == 'admin@lakhipurpharmacy.app'
+            && request.resource.data.role == 'admin');
+      allow update, delete: if isAdmin();
+    }
+
+    // Shop name / logo — readable before login so the login screen shows the logo
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Medicines, stock batches, vendors, customers
+    match /products/{id}  { allow read: if active(); allow create, update: if canEnter(); allow delete: if isAdmin(); }
+    match /batches/{id}   { allow read: if active(); allow create, update, delete: if canEnter(); }
+    match /vendors/{id}   { allow read: if active(); allow create, update: if canEnter(); allow delete: if isAdmin(); }
+    match /customers/{id} { allow read: if active(); allow create, update: if canEnter(); allow delete: if isAdmin(); }
+
+    // Bills: staff can create and record returns; only admin can cancel
+    match /sales/{id} {
+      allow read: if active();
+      allow create: if canEnter() && mine();
+      allow update: if isAdmin() || (isStaff() && request.resource.data.status == resource.data.status);
+      allow delete: if false;
+    }
+    match /returns/{id}   { allow read: if active(); allow create: if canEnter() && mine(); allow update, delete: if isAdmin(); }
+    match /purchases/{id} { allow read: if active(); allow create: if canEnter() && mine(); allow update, delete: if isAdmin(); }
+    match /payments/{id}  { allow read: if active(); allow create: if canEnter() && mine(); allow update, delete: if isAdmin(); }
+    match /expenses/{id}  { allow read: if active(); allow create: if canEnter() && mine(); allow update, delete: if isAdmin(); }
+    match /adjustments/{id} { allow read: if active(); allow create: if isAdmin() && mine(); allow update, delete: if false; }
+
+    // Auto numbers (bill no., return no.)
+    match /counters/{id} { allow read, write: if canEnter(); }
+  }
+}
